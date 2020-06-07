@@ -7,6 +7,8 @@ module rnge = minstd_rand
 module dist = uniform_real_distribution f32 rnge
 type rng = rnge.rng
 
+let n_planets = 10i32
+
 let granularity = 50i32
 
 let max_spike_diff_factor = 2.0f32
@@ -30,6 +32,15 @@ type debug_info = {factor: f32,
                    newly_consumed_mass: f32,
                    planet_mass_theoretical: f32,
                    spike_diff_factor: f32}
+
+let debug_init: debug_info =
+  {factor= -1,
+   factor_lower= -1,
+   factor_upper= -1,
+   n_iters= -1,
+   newly_consumed_mass=0,
+   planet_mass_theoretical= -1,
+   spike_diff_factor=0}
 
 let point_sum: []point -> point = reduce_comm (vec2.+) {y=0, x=0}
 
@@ -80,13 +91,13 @@ let binary_search (goal: f32) (delta_goal: f32) (lower_init: f32) (upper_init: f
 
 type text_content = (i32, f32, f32, f32, i32, f32, f32, f32, f32, i32, f32, f32, f32)
 module lys: lys with text_content = text_content = {
-  type~ state = {planets: []planet,
+  type~ state = {planets: [n_planets]planet,
                  particles: []particle,
                  mouse: {y: i32, x: i32},
                  view_zoom: f32, view_center: point,
                  rng: rng,
                  h: i32, w: i32,
-                 debug: debug_info}
+                 debugs: [n_planets]debug_info}
 
   let grab_mouse = false
 
@@ -105,7 +116,7 @@ module lys: lys with text_content = text_content = {
     in (rng, {center={y=ycenter, x=xcenter}, spikes})
 
   let gen_planets (rng: rng): (rng, []planet) =
-    let rngs = rnge.split_rng 10 rng
+    let rngs = rnge.split_rng n_planets rng
     let (rngs, planets) = unzip (map gen_planet rngs)
     let rng = rnge.join_rng rngs
     in (rng, planets)
@@ -132,13 +143,7 @@ module lys: lys with text_content = text_content = {
         mouse={y=0, x=0},
         view_zoom=0.1, view_center={y=0, x=0},
         rng, h, w,
-        debug={factor= -1,
-               factor_lower= -1,
-               factor_upper= -1,
-               n_iters= -1,
-               newly_consumed_mass=0,
-               planet_mass_theoretical=planet_mass planets[0],
-               spike_diff_factor=0}}
+        debugs=replicate n_planets debug_init}
 
   let accel (center: point) (mass: f32) (p: point): point =
     if p == center
@@ -164,11 +169,11 @@ module lys: lys with text_content = text_content = {
                            in {p=vec2.(p + scale td pd), pd=vec2.(pd + scale td pdd), color}) s.particles
     -- Assume planets don't overlap.
 
-    let step_planet (pl: planet): (planet, debug_info) =
+    let step_planet (pl: planet) (debug_old: debug_info): (planet, debug_info) =
       let collisions = map (check_collision pl <-< (.p)) particles
       let (particles_collisions, _particles_unchanged) = partition ((.has_collision) <-< (.1)) (zip particles collisions)
       in if length particles_collisions == 0
-         then (pl, s.debug)
+         then (pl, debug_old)
          else let collisions' = map (.1) particles_collisions
               let spike_merge spike0 spike1 =
                 {size=spike0.size + spike1.size, color=color_merge (spike0.color, spike0.size) (spike1.color, spike1.size)}
@@ -222,7 +227,7 @@ module lys: lys with text_content = text_content = {
                            spike_diff_factor}
               in (pl with spikes = spikes'', debug)
 
-    let (planets', debugs) = unzip (map step_planet s.planets)
+    let (planets', debugs) = unzip (map2 step_planet s.planets s.debugs)
 
     -- risk of tunneling effect, but we don't care
     let collisions = map (\part -> any (\pl -> (check_collision pl part.p).has_collision) s.planets) particles
@@ -230,7 +235,7 @@ module lys: lys with text_content = text_content = {
     let particles' = map (.0) particles_unchanged
     in s with planets = planets'
          with particles = particles'
-         with debug = debugs[0]
+         with debugs = debugs
 
   let resize (h: i32) (w: i32) (s: state): state =
     s with h = h with w = w
@@ -311,7 +316,7 @@ module lys: lys with text_content = text_content = {
   let text_format () = "FPS: %d\nPlanet 0 mass: %f\nParticle 0 pos (%f, %f)\nParticles: %d\nCollective particle mass: %f\n\nFactor: %f (lower: %f, upper: %f)\nBinary search iterations: %d\nNewly consumed mass: %f\nTheoretical current planet 0 mass: %f\nSpike diff factor: %f"
 
   let text_content (fps: f32) (s: state): text_content =
-    (t32 fps, planet_mass s.planets[0], if length s.particles > 0 then s.particles[0].p.y else -1, if length s.particles > 0 then s.particles[0].p.x else -1, length s.particles, particle_mass * r32 (length s.particles), s.debug.factor, s.debug.factor_lower, s.debug.factor_upper, s.debug.n_iters, s.debug.newly_consumed_mass, s.debug.planet_mass_theoretical, s.debug.spike_diff_factor)
+    (t32 fps, planet_mass s.planets[0], if length s.particles > 0 then s.particles[0].p.y else -1, if length s.particles > 0 then s.particles[0].p.x else -1, length s.particles, particle_mass * r32 (length s.particles), s.debugs[0].factor, s.debugs[0].factor_lower, s.debugs[0].factor_upper, s.debugs[0].n_iters, s.debugs[0].newly_consumed_mass, s.debugs[0].planet_mass_theoretical, s.debugs[0].spike_diff_factor)
 
   let text_colour = const argb.white
 }
