@@ -9,6 +9,8 @@ type rng = rnge.rng
 
 let granularity = 50i32
 
+let max_spike_diff_factor = 2.0f32
+
 type point = vec2.vector
 
 type particle = {p: point, pd: point, color: argb.colour}
@@ -26,7 +28,8 @@ type debug_info = {factor: f32,
                    factor_upper: f32,
                    n_iters: i32,
                    newly_consumed_mass: f32,
-                   planet_mass_theoretical: f32}
+                   planet_mass_theoretical: f32,
+                   spike_diff_factor: f32}
 
 let point_sum: []point -> point = reduce_comm (vec2.+) {y=0, x=0}
 
@@ -75,7 +78,7 @@ let binary_search (goal: f32) (delta_goal: f32) (lower_init: f32) (upper_init: f
        in (inp', f inp', lower', upper', i + 1)
   in (inp, n_iters)
 
-type text_content = (i32, f32, f32, f32, i32, f32, f32, f32, f32, i32, f32, f32)
+type text_content = (i32, f32, f32, f32, i32, f32, f32, f32, f32, i32, f32, f32, f32)
 module lys: lys with text_content = text_content = {
   type~ state = {planets: []planet,
                  particles: []particle,
@@ -134,7 +137,8 @@ module lys: lys with text_content = text_content = {
                factor_upper= -1,
                n_iters= -1,
                newly_consumed_mass=0,
-               planet_mass_theoretical=planet_mass planets[0]}}
+               planet_mass_theoretical=planet_mass planets[0],
+               spike_diff_factor=0}}
 
   let accel (center: point) (mass: f32) (p: point): point =
     if p == center
@@ -186,15 +190,37 @@ module lys: lys with text_content = text_content = {
               let (factor_lower, factor_upper) = -- finetune maybe
                 (0, f32.sqrt (planet_mass_goal / f32.pi) / f32.maximum (map (.size) spikes_additions))
 
-              let (factor_approx, n_iters) = binary_search planet_mass_goal 0.00001 factor_lower factor_upper 100 calc_mass
+              let binsearch_goal_delta = 0.00001
+              let max_iter = 100
+              let (factor_approx, n_iters) = binary_search planet_mass_goal binsearch_goal_delta factor_lower factor_upper max_iter calc_mass
               let spikes' = calc_spikes factor_approx
+
+              let spike_min = f32.minimum (map (.size) spikes')
+              let spike_diff_factor = f32.maximum (map (.size) spikes') / spike_min
+              let (spikes'', factor_approx, n_iters) =
+                if spike_diff_factor <= max_spike_diff_factor
+                then (spikes', factor_approx, n_iters)
+                else let spikes_reshaped =
+                       map (\(s: spike) ->
+                              s with size = if s.size / spike_min <= max_spike_diff_factor
+                                            then s.size
+                                            else spike_min * max_spike_diff_factor) spikes'
+                     let calc_spikes' (factor: f32): []spike =
+                       map (\(s: spike) -> s with size = factor * s.size) spikes_reshaped
+                     let calc_mass' (factor: f32): f32 = planet_mass' (map (.size) (calc_spikes' factor))
+                     let (factor_lower', factor_upper') = (1, spike_diff_factor)
+                     let (factor_reshape_approx, n_iters) =
+                       binary_search planet_mass_goal binsearch_goal_delta factor_lower' factor_upper' max_iter calc_mass'
+                     in (calc_spikes' factor_reshape_approx, factor_reshape_approx, n_iters)
+
               let debug = {factor=factor_approx,
                            factor_lower=factor_lower,
                            factor_upper=factor_upper,
                            n_iters=n_iters,
                            newly_consumed_mass=new_mass,
-                           planet_mass_theoretical=planet_mass_goal}
-              in (pl with spikes = spikes', debug)
+                           planet_mass_theoretical=planet_mass_goal,
+                           spike_diff_factor}
+              in (pl with spikes = spikes'', debug)
 
     let (planets', debugs) = unzip (map step_planet s.planets)
 
@@ -282,10 +308,10 @@ module lys: lys with text_content = text_content = {
 
   type text_content = text_content
 
-  let text_format () = "FPS: %d\nPlanet 0 mass: %f\nParticle 0 pos (%f, %f)\nParticles: %d\nCollective particle mass: %f\n\nFactor: %f (lower: %f, upper: %f)\nBinary search iterations: %d\nNewly consumed mass: %f\nTheoretical current planet 0 mass: %f"
+  let text_format () = "FPS: %d\nPlanet 0 mass: %f\nParticle 0 pos (%f, %f)\nParticles: %d\nCollective particle mass: %f\n\nFactor: %f (lower: %f, upper: %f)\nBinary search iterations: %d\nNewly consumed mass: %f\nTheoretical current planet 0 mass: %f\nSpike diff factor: %f"
 
   let text_content (fps: f32) (s: state): text_content =
-    (t32 fps, planet_mass s.planets[0], if length s.particles > 0 then s.particles[0].p.y else -1, if length s.particles > 0 then s.particles[0].p.x else -1, length s.particles, particle_mass * r32 (length s.particles), s.debug.factor, s.debug.factor_lower, s.debug.factor_upper, s.debug.n_iters, s.debug.newly_consumed_mass, s.debug.planet_mass_theoretical)
+    (t32 fps, planet_mass s.planets[0], if length s.particles > 0 then s.particles[0].p.y else -1, if length s.particles > 0 then s.particles[0].p.x else -1, length s.particles, particle_mass * r32 (length s.particles), s.debug.factor, s.debug.factor_lower, s.debug.factor_upper, s.debug.n_iters, s.debug.newly_consumed_mass, s.debug.planet_mass_theoretical, s.debug.spike_diff_factor)
 
   let text_colour = const argb.white
 }
