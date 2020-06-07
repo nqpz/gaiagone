@@ -280,13 +280,11 @@ module lys: lys with text_content = text_content = {
     r32 (i32.min s.h s.w) * s.view_zoom
 
   let zoom_at_mouse (zoom_factor: f32) (s: state): state =
-    let xb = r32 (s.mouse.x - s.w / 2)
-    let xd = xb / xy_factor s - xb / (xy_factor s * zoom_factor)
-    let yb = r32 (s.mouse.y - s.h / 2)
-    let yd = yb / xy_factor s - yb / (xy_factor s * zoom_factor)
+    let b = {y=r32 (s.mouse.y - s.h / 2),
+             x=r32 (s.mouse.x - s.w / 2)}
+    let d = vec2.scale (1 / xy_factor s) b vec2.- vec2.scale (1 / (xy_factor s * zoom_factor)) b
     in s with view_zoom = s.view_zoom * zoom_factor
-         with view_center.y = s.view_center.y + yd
-         with view_center.x = s.view_center.x + xd
+         with view_center = s.view_center vec2.+d
 
   let event (e: event) (s: state): state =
     match e
@@ -308,10 +306,9 @@ module lys: lys with text_content = text_content = {
       else s
     case #mouse {buttons, x, y} ->
       let s = if bool.i32 (buttons & 0b001)
-              then let y_diff = s.mouse.y - y
-                   let x_diff = s.mouse.x - x
-                   in s with view_center.y = s.view_center.y + r32 y_diff / xy_factor s
-                        with view_center.x = s.view_center.x + r32 x_diff / xy_factor s
+              then let diff = {y=r32 (s.mouse.y - y) / xy_factor s,
+                               x=r32 (s.mouse.x - x) / xy_factor s}
+                   in s with view_center = s.view_center vec2.+ diff
               else s
       let s = s with mouse = {y, x}
       in s
@@ -323,14 +320,15 @@ module lys: lys with text_content = text_content = {
 
   let render (s: state): [][]argb.colour =
     let render_planet_at (yi: i32) (xi: i32): argb.colour =
-      let y = r32 (yi - s.h / 2) / xy_factor s + s.view_center.y
-      let x = r32 (xi - s.w / 2) / xy_factor s + s.view_center.x
-      let planet_colors = map (\pl -> let c = check_collision pl {y, x}
-                                      in if c.has_collision
-                                         then let color0 = pl.spikes[c.spike0.0].color
-                                              let color1 = pl.spikes[c.spike1.0].color
-                                              in argb.mix c.spike0.1 color0 c.spike1.1 color1
-                                         else 0) s.planets
+      let base = {y=r32 (yi - s.h / 2), x=r32 (xi - s.w / 2)}
+      let p = vec2.scale (1 / xy_factor s) base vec2.+ s.view_center
+      let planet_colors =
+        map (\pl -> let c = check_collision pl p
+                    in if c.has_collision
+                       then let (color0, color1) = (pl.spikes[c.spike0.0].color,
+                                                    pl.spikes[c.spike1.0].color)
+                            in argb.mix c.spike0.1 color0 c.spike1.1 color1
+                       else 0) s.planets
       in (reduce_comm (\(c0, m0) (c1, m1) -> (color_merge (c0, m0) (c1, m1), m0 + m1)) (0, 0) (zip planet_colors (map planet_mass s.planets))).0
 
     let particle_index ({p, pd=_, color}: particle): (i32, argb.colour) =
