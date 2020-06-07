@@ -87,47 +87,46 @@ type~ state = {planets: [n_planets]planet,
                view_zoom: f32, view_center: point,
                rng: rng,
                h: i32, w: i32,
+               info_idx: i32,
                debugs: [n_planets]debug_info}
 
-let debug_init: debug_info =
+let debug_init (pl: planet): debug_info =
   {factor= -1,
    factor_lower= -1,
    factor_upper= -1,
    n_iters= -1,
-   newly_consumed_mass=0,
-   planet_mass_theoretical= -1,
-   spike_diff_factor=0}
+   newly_consumed_mass= -1,
+   planet_mass_theoretical=planet_mass pl,
+   spike_diff_factor= -1}
 
-type text_content = (i32, f32, f32, f32, i32, f32, f32, f32, f32, i32, f32, f32, f32)
+type text_content = (i32, i32, f32, i32, f32, f32, f32, f32, f32, i32, f32, f32)
 
 let lys_text_format () =
   "FPS: %d\n"
-  ++ "Planet 0 mass: %f\n"
-  ++ "Particle 0 pos (%f, %f)\n"
   ++ "Particles: %d\n"
   ++ "Collective particle mass: %f\n"
   ++ "\n"
-  ++ "Debugging information:\n"
+  ++ "Information about planet %d:\n"
+  ++ "Planet mass: %f\n"
+  ++ "Theoretical planet mass: %f\n"
   ++ "Factor: %f (lower: %f, upper: %f)\n"
   ++ "Binary search iterations: %d\n"
   ++ "Newly consumed mass: %f\n"
-  ++ "Theoretical current planet 0 mass: %f\n"
   ++ "Spike diff factor: %f"
 
 let lys_text_content (fps: f32) (s: state): text_content =
   (t32 fps,
-   planet_mass s.planets[0],
-   if length s.particles > 0 then s.particles[0].p.y else -1,
-   if length s.particles > 0 then s.particles[0].p.x else -1,
    length s.particles,
    particle_mass * r32 (length s.particles),
-   s.debugs[0].factor,
-   s.debugs[0].factor_lower,
-   s.debugs[0].factor_upper,
-   s.debugs[0].n_iters,
-   s.debugs[0].newly_consumed_mass,
-   s.debugs[0].planet_mass_theoretical,
-   s.debugs[0].spike_diff_factor)
+   s.info_idx,
+   planet_mass s.planets[s.info_idx],
+   s.debugs[s.info_idx].planet_mass_theoretical,
+   s.debugs[s.info_idx].factor,
+   s.debugs[s.info_idx].factor_lower,
+   s.debugs[s.info_idx].factor_upper,
+   s.debugs[s.info_idx].n_iters,
+   s.debugs[s.info_idx].newly_consumed_mass,
+   s.debugs[s.info_idx].spike_diff_factor)
 
 module lys: lys with text_content = text_content = {
   type~ state = state
@@ -176,7 +175,8 @@ module lys: lys with text_content = text_content = {
         mouse={y=0, x=0},
         view_zoom=0.1, view_center={y=0, x=0},
         rng, h, w,
-        debugs=replicate n_planets debug_init}
+        info_idx=0,
+        debugs=map debug_init planets}
 
   let accel (center: point) (mass: f32) (p: point): point =
     if p == center
@@ -200,7 +200,10 @@ module lys: lys with text_content = text_content = {
                            let pdd = point_sum (map (\pl -> accel pl.center (planet_mass pl) p) s.planets)
                                      vec2.+ point_sum (map (\part -> accel part.p particle_mass p) s.particles)
                            in {p=vec2.(p + scale td pd), pd=vec2.(pd + scale td pdd), color}) s.particles
-    -- Assume planets don't overlap.
+
+    -- NOTE: We assume that planets don't overlap, but they do.  Currently, a
+    -- particle that hits more than one planet counts as having hit all those
+    -- planets, i.e., we don't have mass conservation in that case.
 
     let step_planet (pl: planet) (debug_old: debug_info): (planet, debug_info) =
       let collisions = map (check_collision pl <-< (.p)) particles
@@ -296,6 +299,10 @@ module lys: lys with text_content = text_content = {
            in s with planets = planets
                 with particles = particles
                 with rng = rng
+      else if key == SDLK_1
+      then s with info_idx = (s.info_idx - 1) % n_planets
+      else if key == SDLK_2
+      then s with info_idx = (s.info_idx + 1) % n_planets
       -- else if key == SDLK_SPACE
       -- then step 0.01 s
       else s
