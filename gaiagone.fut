@@ -333,15 +333,12 @@ module lys: lys with text_content = text_content = {
                                          else 0) s.planets
       in (reduce_comm (\(c0, m0) (c1, m1) -> (color_merge (c0, m0) (c1, m1), m0 + m1)) (0, 0) (zip planet_colors (map planet_mass s.planets))).0
 
-    let particle_index ({p={y, x}, pd=_, color}: particle): (i32, argb.colour) =
+    let particle_index ({p, pd=_, color}: particle): (i32, argb.colour) =
       let xy_fac = r32 (i32.min s.h s.w)
-      let x_offset_base = r32 (i32.max 0 (s.w - s.h)) / xy_fac
-      let y_offset_base = r32 (i32.max 0 (s.h - s.w)) / xy_fac
-      let x_offset = (x_offset_base / 2)
-      let y_offset = (y_offset_base / 2)
-
-      let y = t32 (xy_fac * ((y * s.view_zoom + 0.5 + y_offset) - s.view_center.y * s.view_zoom))
-      let x = t32 (xy_fac * ((x * s.view_zoom + 0.5 + x_offset) - s.view_center.x * s.view_zoom))
+      let find_base = r32 <-< i32.max 0
+      let offset = vec2.scale (1 / xy_fac / 2) {y=find_base (s.h - s.w), x=find_base (s.w - s.h)}
+      let p' = vec2.(scale xy_fac ((scale s.view_zoom p + {y=0.5, x=0.5} + offset) - scale s.view_zoom s.view_center))
+      let (y, x) = (t32 p'.y, t32 p'.x)
       in if y >= 0 && y < s.h && x >= 0 && x < s.w
          then (y * s.w + x, color)
          else (-1, 0)
