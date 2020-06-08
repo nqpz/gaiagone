@@ -29,20 +29,93 @@ type collision_info = {has_collision: bool,
 
 let point_sum: []point -> point = reduce_comm (vec2.+) {y=0, x=0}
 
-let check_collision (pl: planet) (po: point): collision_info =
-  let yrel = po.y - pl.center.y
-  let xrel = po.x - pl.center.x
-  let dist = f32.sqrt (yrel**2 + xrel**2)
-  let degrees = f32.atan2 yrel xrel
+let binary_search (goal: f32) (delta_goal: f32) (lower_init: f32) (upper_init: f32)
+                  (max_iter: i32) (f: f32 -> f32): (f32, i32) =
+  let pick (lower: f32) (upper: f32): f32 = lower + (upper - lower) / 2
+  let inp_init = pick lower_init upper_init
+  let (inp, _, _, _, n_iters) =
+    loop (inp, res, lower, upper, i) = (inp_init, f inp_init, lower_init, upper_init, 0)
+    while f32.abs (res - goal) > delta_goal && i < max_iter
+    do let (inp', lower', upper') =
+         if res > goal
+         then (pick lower inp, lower, inp)
+         else (pick inp upper, inp, upper)
+       in (inp', f inp', lower', upper', i + 1)
+  in (inp, n_iters)
+
+let newton_solve (f: f32 -> f32) (f': f32 -> f32) (delta_goal: f32) (max_iter: i32) (initial: f32): f32 =
+  let (res, _n_iters) =
+    loop (x, i) = (initial, 0)
+    while f32.abs x > delta_goal && i < max_iter
+    do (x - f x / f' x, i + 1)
+  in res
+
+let find_spike_idx (pl: planet) (po: point): (i32, f32, f32) =
+  let rel = po vec2.- pl.center
+  let dist = f32.sqrt (rel.y**2 + rel.x**2)
+  let degrees = f32.atan2 rel.y rel.x
   let spike_idx_base = r32 granularity * ((degrees + f32.pi) / (2 * f32.pi))
-  let spike_idx0 = t32 spike_idx_base % granularity
+  in (t32 spike_idx_base % granularity, spike_idx_base % 1, dist)
+
+let check_collision (pl: planet) (po: point): collision_info =
+  let (spike_idx0, spike_idx_favor1, dist) = find_spike_idx pl po
   let spike_idx1 = (spike_idx0 + 1) % granularity
-  let spike_idx_favor1 = spike_idx_base % 1
   let spike_idx_favor0 = 1 - spike_idx_favor1
   let spike = pl.spikes[spike_idx0].size * spike_idx_favor0 +
               pl.spikes[spike_idx1].size * spike_idx_favor1
   let has_collision = dist <= spike
   in {has_collision, spike0=(spike_idx0, spike_idx_favor0), spike1=(spike_idx1, spike_idx_favor1)}
+
+let check_collision_movement (pl: planet) (po_from: point) (po_to: point): collision_info =
+  -- XXX: It might be faster to not check all spikes, but instead start by
+  -- finding all possible spikes that the movement could overlap with.
+  -- Something like this, and then interpolating the inbetween indices:
+  --
+  --   let (spike_idx_start, spike_idx_end) = ((find_spike_idx pl po_from).0, (find_spike_idx pl po_to).0)
+  --
+  -- Special care needs to be taken w.r.t. the interpolation, as the indices
+  -- wrap around (since it's a circle).
+
+  let find_t ((i0, s0): (i32, spike)) ((i1, s1): (i32, spike)): [](f32, collision_info) =
+    let (size0, size1) = (s0.size, s1.size)
+    let (deg0, deg1) = ((2 * f32.pi / r32 granularity) * r32 i0 + f32.pi,
+                        (2 * f32.pi / r32 granularity) * r32 i1 + f32.pi)
+
+    let t0_div = size0 * f32.cos deg0 + po_from.x + po_to.x - pl.center.x
+    let (t0_possible, t0) = if t0_div != 0
+                            then (true, (po_from.x - pl.center.x) / t0_div)
+                            else (false, f32.nan)
+    let t0_ok = t0_possible && 0 <= t0 && t0 < 1
+    let t0_info = {has_collision=t0_ok, spike0=(i0, 1), spike1=(i1, 0)}
+
+    let t1_div = size1 * f32.cos deg1 + po_from.x + po_to.x - pl.center.x
+    let (t1_possible, t1) = if t1_div != 0
+                            then (true, (po_from.x - pl.center.x) / t1_div)
+                            else (false, f32.nan)
+    let t1_ok = t1_possible && 0 <= t1 && t1 < 1
+    let t1_info = {has_collision=t1_ok, spike0=(i0, 0), spike1=(i1, 1)}
+
+    let t2_f t = ((1 - t) * size0 + t * size1) * f32.cos ((1 - t) * deg0 + t * deg1)
+    let t2_f' t = (size1 - size0) * f32.cos (deg0 * (1 - t) + deg1 * t) +
+                  (size0 * (1 - t) + size1 * t) * (deg0 - deg1) * f32.sin (deg0 * (1 - t) + deg1 * t)
+    let t2 = newton_solve t2_f t2_f' 0.00001 100 0.5
+    let t2_ok = 0 <= t2 && t2 < 1
+    let t2_info = {has_collision=t2_ok, spike0=(i0, t2), spike1=(i1, 1 - t2)}
+
+    in [(t0, t0_info), (t1, t1_info), (t2, t2_info)]
+
+  let ts = flatten (map (\(i0, i1) -> find_t (i0, pl.spikes[i0]) (i1, pl.spikes[i1]))
+                        (map (\i -> (i, (i + 1) % granularity)) (0..<granularity)))
+  let empty_collision_info = {has_collision=false, spike0=(-1, 0), spike1=(-1, 0)}
+  let (_t, info) = reduce_comm (\(t0, info0) (t1, info1) -> if !info0.has_collision
+                                                            then (t1, info1)
+                                                            else if !info1.has_collision
+                                                            then (t0, info0)
+                                                            else if t0 < t1
+                                                            then (t0, info0)
+                                                            else (t1, info1))
+                               (1, empty_collision_info) ts
+  in info
 
 let planet_mass' (spike_sizes: []f32): f32 =
   let segments = map (\i -> (i, (i + 1) % granularity)) (0..<length spike_sizes)
@@ -57,20 +130,6 @@ let planet_mass' (spike_sizes: []f32): f32 =
   in f32.sum (map segment_mass segments)
 
 let planet_mass (pl: planet): f32 = planet_mass' (map (.size) pl.spikes)
-
-let binary_search (goal: f32) (delta_goal: f32) (lower_init: f32) (upper_init: f32)
-                  (max_iter: i32) (f: f32 -> f32): (f32, i32) =
-  let pick (lower: f32) (upper: f32): f32 = lower + (upper - lower) / 2
-  let inp_init = pick lower_init upper_init
-  let (inp, _, _, _, n_iters) =
-    loop (inp, res, lower, upper, i) = (inp_init, f inp_init, lower_init, upper_init, 0)
-    while f32.abs (res - goal) > delta_goal && i < max_iter
-    do let (inp', lower', upper') =
-         if res > goal
-         then (pick lower inp, lower, inp)
-         else (pick inp upper, inp, upper)
-       in (inp', f inp', lower', upper', i + 1)
-  in (inp, n_iters)
 
 
 type debug_info = {factor: f32,
@@ -188,10 +247,13 @@ let step (td: f32) (s: state): state =
 
 -- NOTE: We assume that planets don't overlap, but they do.  Currently, a
 -- particle that hits more than one planet counts as having hit all those
--- planets, i.e., we don't have mass conservation in that case.
+-- planets, i.e., we don't have mass conservation in that case.  FIXME: Add
+-- planet-planet collision detection.
 
   let step_planet (pl: planet) (debug_old: debug_info): (planet, debug_info) =
     let collisions = map (check_collision pl <-< (.p)) particles
+    -- FIXME: This will solve the tunneling effect once it works.
+    -- let collisions = map2 (\part_old part_new -> check_collision_movement pl part_old.p part_new.p) s.particles particles
     let (particles_collisions, _particles_unchanged) = partition ((.has_collision) <-< (.1)) (zip particles collisions)
     in if length particles_collisions == 0
        then (pl, debug_old)
@@ -248,7 +310,7 @@ let step (td: f32) (s: state): state =
                          spike_diff_factor}
             in (pl with spikes = spikes'', debug)
 
-  let (planets', debugs) = unzip (map2 step_planet s.planets s.debugs)
+  let (planets', debugs) = unzip (map2 step_planet s.planets s.debugs) -- fixme keep debugs within planets field
 
   -- risk of tunneling effect, but we don't care
   let collisions = map (\part -> any (\pl -> (check_collision pl part.p).has_collision) s.planets) particles
@@ -336,9 +398,9 @@ module lys: lys with text_content = text_content = {
       else s
     case #mouse {buttons, x, y} ->
       let s = if bool.i32 (buttons & 0b001)
-              then let diff = {y=r32 (s.mouse.y - y) / xy_factor s,
-                               x=r32 (s.mouse.x - x) / xy_factor s}
-                   in s with view_center = s.view_center vec2.+ diff
+              then let diff = {y=r32 (s.mouse.y - y),
+                               x=r32 (s.mouse.x - x)}
+                   in s with view_center = s.view_center vec2.+ vec2.scale (1 / xy_factor s) diff
               else s
       let s = s with mouse = {y, x}
       in s
