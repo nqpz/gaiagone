@@ -393,8 +393,6 @@ module lys: lys with text_content = text_content = {
       then s with info_idx = (s.info_idx - 1) % n_planets
       else if key == SDLK_2
       then s with info_idx = (s.info_idx + 1) % n_planets
-      -- else if key == SDLK_SPACE
-      -- then step 0.01 s
       else s
     case #mouse {buttons, x, y} ->
       let s = if bool.i32 (buttons & 0b001)
