@@ -21,8 +21,8 @@ type particle = {p: point, pd: point, color: argb.colour}
 
 type spike = {size: f32, color: argb.colour}
 
-type planet = {center: point,
-               spikes: [granularity]spike}
+type planet [g] = {center: point,
+                   spikes: [g]spike}
 
 type collision_info = {has_collision: bool,
                        spike0: (i32, f32), spike1: (i32, f32)}
@@ -50,14 +50,14 @@ let newton_solve (f: f32 -> f32) (f': f32 -> f32) (delta_goal: f32) (max_iter: i
     do (x - f x / f' x, i + 1)
   in res
 
-let find_spike_idx (pl: planet) (po: point): (i32, f32, f32) =
+let find_spike_idx [g] (pl: planet [g]) (po: point): (i32, f32, f32) =
   let rel = po vec2.- pl.center
   let dist = f32.sqrt (rel.y**2 + rel.x**2)
   let degrees = f32.atan2 rel.y rel.x
   let spike_idx_base = r32 granularity * ((degrees + f32.pi) / (2 * f32.pi))
   in (t32 spike_idx_base % granularity, spike_idx_base % 1, dist)
 
-let check_collision (pl: planet) (po: point): collision_info =
+let check_collision [g] (pl: planet [g]) (po: point): collision_info =
   let (spike_idx0, spike_idx_favor1, dist) = find_spike_idx pl po
   let spike_idx1 = (spike_idx0 + 1) % granularity
   let spike_idx_favor0 = 1 - spike_idx_favor1
@@ -66,7 +66,7 @@ let check_collision (pl: planet) (po: point): collision_info =
   let has_collision = dist <= spike
   in {has_collision, spike0=(spike_idx0, spike_idx_favor0), spike1=(spike_idx1, spike_idx_favor1)}
 
-let check_collision_movement (pl: planet) (po_from: point) (po_to: point): collision_info =
+let check_collision_movement [g] (pl: planet [g]) (po_from: point) (po_to: point): collision_info =
   -- XXX: It might be faster to not check all spikes, but instead start by
   -- finding all possible spikes that the movement could overlap with.
   -- Something like this, and then interpolating the inbetween indices:
@@ -129,7 +129,7 @@ let planet_mass' (spike_sizes: []f32): f32 =
        else size0**2 * f32.pi / r32 granularity
   in f32.sum (map segment_mass segments)
 
-let planet_mass (pl: planet): f32 = planet_mass' (map (.size) pl.spikes)
+let planet_mass [g] (pl: planet [g]): f32 = planet_mass' (map (.size) pl.spikes)
 
 
 type debug_info = {factor: f32,
@@ -140,7 +140,7 @@ type debug_info = {factor: f32,
                    planet_mass_theoretical: f32,
                    spike_diff_factor: f32}
 
-type~ state = {planets: [n_planets]planet,
+type~ state = {planets: [n_planets](planet []),
                particles: []particle,
                mouse: {y: i32, x: i32},
                view_zoom: f32, view_center: point,
@@ -149,7 +149,7 @@ type~ state = {planets: [n_planets]planet,
                info_idx: i32,
                debugs: [n_planets]debug_info}
 
-let debug_init (pl: planet): debug_info =
+let debug_init [g] (pl: planet [g]): debug_info =
   {factor= -1,
    factor_lower= -1,
    factor_upper= -1,
@@ -188,7 +188,7 @@ let lys_text_content (fps: f32) (s: state): text_content =
    s.debugs[s.info_idx].spike_diff_factor)
 
 
-let gen_planet (rng: rng): (rng, planet) =
+let gen_planet (rng: rng): (rng, planet [granularity]) =
   let rngs = rnge.split_rng granularity rng
   let (rngs, spikes) = unzip (map (\rng ->
                                      let (rng, size) = dist.rand (0.05, 0.06) rng
@@ -202,7 +202,7 @@ let gen_planet (rng: rng): (rng, planet) =
   let (rng, xcenter) = dist.rand (-4.5, 4.5) rng
   in (rng, {center={y=ycenter, x=xcenter}, spikes})
 
-let gen_planets (rng: rng): (rng, []planet) =
+let gen_planets (rng: rng): (rng, [](planet [granularity])) =
   let rngs = rnge.split_rng n_planets rng
   let (rngs, planets) = unzip (map gen_planet rngs)
   let rng = rnge.join_rng rngs
@@ -250,7 +250,7 @@ let step (td: f32) (s: state): state =
 -- planets, i.e., we don't have mass conservation in that case.  FIXME: Add
 -- planet-planet collision detection.
 
-  let step_planet (pl: planet) (debug_old: debug_info): (planet, debug_info) =
+  let step_planet [g] (pl: planet [g]) (debug_old: debug_info): (planet [g], debug_info) =
     let collisions = map (check_collision pl <-< (.p)) particles
     -- FIXME: This will solve the tunneling effect once it works.
     -- let collisions = map2 (\part_old part_new -> check_collision_movement pl part_old.p part_new.p) s.particles particles
@@ -269,10 +269,10 @@ let step (td: f32) (s: state): state =
             let spikes_additions = reduce_by_index spikes_empty spike_merge spike_empty indices values
             let new_mass = particle_mass * r32 (length particles_collisions)
             let planet_mass_goal = planet_mass pl + new_mass
-            let calc_spikes (factor: f32): []spike = map2 (\s sa ->
-                                                             let sa_size' = factor * sa.size
-                                                             in {size=s.size + sa_size',
-                                                                 color=color_merge (s.color, s.size) (sa.color, sa_size')})
+            let calc_spikes (factor: f32): [g]spike = map2 (\s sa ->
+                                                              let sa_size' = factor * sa.size
+                                                              in {size=s.size + sa_size',
+                                                                  color=color_merge (s.color, s.size) (sa.color, sa_size')})
                                                           pl.spikes spikes_additions
             let calc_mass (factor: f32): f32 = planet_mass' (map (.size) (calc_spikes factor))
             let (factor_lower, factor_upper) = -- finetune maybe
@@ -280,28 +280,25 @@ let step (td: f32) (s: state): state =
 
             let binsearch_goal_delta = 0.00001
             let max_iter = 100
-            let (factor_approx, n_iters) = binary_search planet_mass_goal binsearch_goal_delta factor_lower factor_upper max_iter calc_mass
+            let (factor_approx, _n_iters) = binary_search planet_mass_goal binsearch_goal_delta factor_lower factor_upper max_iter calc_mass
             let spikes' = calc_spikes factor_approx
 
             let spike_min = f32.minimum (map (.size) spikes')
             let spike_diff_factor = f32.maximum (map (.size) spikes') / spike_min
-            let (spikes'', factor_approx, n_iters) =
-              if spike_diff_factor <= max_spike_diff_factor
-              then (spikes', factor_approx, n_iters)
-              else let spikes_reshaped =
-                     map (\(s: spike) ->
-                            s with size = if s.size / spike_min <= max_spike_diff_factor
-                                          then s.size
-                                          else spike_min * max_spike_diff_factor) spikes'
-                   let calc_spikes' (factor: f32): []spike =
-                     map (\(s: spike) -> s with size = factor * s.size) spikes_reshaped
-                   let calc_mass' (factor: f32): f32 = planet_mass' (map (.size) (calc_spikes' factor))
-                   let (factor_lower', factor_upper') = (1, spike_diff_factor)
-                   let (factor_reshape_approx, n_iters) =
-                     binary_search planet_mass_goal binsearch_goal_delta factor_lower' factor_upper' max_iter calc_mass'
-                   in (calc_spikes' factor_reshape_approx, factor_reshape_approx, n_iters)
+            let spikes_reshaped =
+              map (\(s: spike) ->
+                     s with size = if s.size / spike_min <= max_spike_diff_factor
+                                   then s.size
+                                   else spike_min * max_spike_diff_factor) spikes'
+            let calc_spikes' (factor: f32): [g]spike =
+              map (\(s: spike) -> s with size = factor * s.size) spikes_reshaped
+            let calc_mass' (factor: f32): f32 = planet_mass' (map (.size) (calc_spikes' factor))
+            let (factor_lower', factor_upper') = (1, spike_diff_factor)
+            let (factor_reshape_approx, n_iters) =
+              binary_search planet_mass_goal binsearch_goal_delta factor_lower' factor_upper' max_iter calc_mass'
+            let spikes'' = calc_spikes' factor_reshape_approx
 
-            let debug = {factor=factor_approx,
+            let debug = {factor=factor_reshape_approx,
                          factor_lower=factor_lower,
                          factor_upper=factor_upper,
                          n_iters=n_iters,
