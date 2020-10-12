@@ -7,9 +7,9 @@ module rnge = minstd_rand
 module dist = uniform_real_distribution f32 rnge
 type rng = rnge.rng
 
-let n_planets = 10i32
+let n_planets = 10i64
 
-let granularity = 50i32
+let granularity = 50i64
 
 let max_spike_diff_factor = 2.0f32
 
@@ -25,7 +25,7 @@ type planet [g] = {center: point,
                    spikes: [g]spike}
 
 type collision_info = {has_collision: bool,
-                       spike0: (i32, f32), spike1: (i32, f32)}
+                       spike0: (i64, f32), spike1: (i64, f32)}
 
 let point_sum: []point -> point = reduce_comm (vec2.+) {y=0, x=0}
 
@@ -50,12 +50,12 @@ let newton_solve (f: f32 -> f32) (f': f32 -> f32) (delta_goal: f32) (max_iter: i
     do (x - f x / f' x, i + 1)
   in res
 
-let find_spike_idx [g] (pl: planet [g]) (po: point): (i32, f32, f32) =
+let find_spike_idx [g] (pl: planet [g]) (po: point): (i64, f32, f32) =
   let rel = po vec2.- pl.center
   let dist = f32.sqrt (rel.y**2 + rel.x**2)
   let degrees = f32.atan2 rel.y rel.x
-  let spike_idx_base = r32 granularity * ((degrees + f32.pi) / (2 * f32.pi))
-  in (t32 spike_idx_base % granularity, spike_idx_base % 1, dist)
+  let spike_idx_base = f32.i64 granularity * ((degrees + f32.pi) / (2 * f32.pi))
+  in (i64.f32 spike_idx_base % granularity, spike_idx_base % 1, dist)
 
 let check_collision [g] (pl: planet [g]) (po: point): collision_info =
   let (spike_idx0, spike_idx_favor1, dist) = find_spike_idx pl po
@@ -76,10 +76,10 @@ let check_collision_movement [g] (pl: planet [g]) (po_from: point) (po_to: point
   -- Special care needs to be taken w.r.t. the interpolation, as the indices
   -- wrap around (since it's a circle).
 
-  let find_t ((i0, s0): (i32, spike)) ((i1, s1): (i32, spike)): [](f32, collision_info) =
+  let find_t ((i0, s0): (i64, spike)) ((i1, s1): (i64, spike)): [](f32, collision_info) =
     let (size0, size1) = (s0.size, s1.size)
-    let (deg0, deg1) = ((2 * f32.pi / r32 granularity) * r32 i0 + f32.pi,
-                        (2 * f32.pi / r32 granularity) * r32 i1 + f32.pi)
+    let (deg0, deg1) = ((2 * f32.pi / f32.i64 granularity) * f32.i64 i0 + f32.pi,
+                        (2 * f32.pi / f32.i64 granularity) * f32.i64 i1 + f32.pi)
 
     let t0_div = size0 * f32.cos deg0 + po_from.x + po_to.x - pl.center.x
     let (t0_possible, t0) = if t0_div != 0
@@ -119,14 +119,14 @@ let check_collision_movement [g] (pl: planet [g]) (po_from: point) (po_to: point
 
 let planet_mass' (spike_sizes: []f32): f32 =
   let segments = map (\i -> (i, (i + 1) % granularity)) (0..<length spike_sizes)
-  let segment_mass ((i, j): (i32, i32)): f32 =
+  let segment_mass ((i, j): (i64, i64)): f32 =
     let size0 = spike_sizes[i]
     let size1 = spike_sizes[j]
     -- Integrate (size0 i + size1 - i size1)**2 * f32.pi / r32 granularity  for [0..1]:
-    let size_integrated i = f32.pi * (i * size0 + size1 - size1 * i)**3 / (r32 granularity * (3 * size0 - 3 * size1))
+    let size_integrated i = f32.pi * (i * size0 + size1 - size1 * i)**3 / (f32.i64 granularity * (3 * size0 - 3 * size1))
     in if size0 != size1
        then size_integrated 1 - size_integrated 0
-       else size0**2 * f32.pi / r32 granularity
+       else size0**2 * f32.pi / f32.i64 granularity
   in f32.sum (map segment_mass segments)
 
 let planet_mass [g] (pl: planet [g]): f32 = planet_mass' (map (.size) pl.spikes)
@@ -146,7 +146,7 @@ type~ state = {planets: [n_planets](planet []),
                view_zoom: f32, view_center: point,
                rng: rng,
                h: i32, w: i32,
-               info_idx: i32,
+               info_idx: i64,
                debugs: [n_planets]debug_info}
 
 let debug_init [g] (pl: planet [g]): debug_info =
@@ -158,7 +158,7 @@ let debug_init [g] (pl: planet [g]): debug_info =
    planet_mass_theoretical=planet_mass pl,
    spike_diff_factor= -1}
 
-type text_content = (i32, i32, f32, i32, f32, f32, f32, f32, f32, i32, f32, f32)
+type text_content = (i32, i64, f32, i64, f32, f32, f32, f32, f32, i32, f32, f32)
 
 let lys_text_format () =
   "FPS: %d\n"
@@ -176,7 +176,7 @@ let lys_text_format () =
 let lys_text_content (fps: f32) (s: state): text_content =
   (t32 fps,
    length s.particles,
-   particle_mass * r32 (length s.particles),
+   particle_mass * f32.i64 (length s.particles),
    s.info_idx,
    planet_mass s.planets[s.info_idx],
    s.debugs[s.info_idx].planet_mass_theoretical,
@@ -263,11 +263,11 @@ let step (td: f32) (s: state): state =
             let spike_empty = {size=0, color=0} -- ignore black, use as special value
             let spikes_empty = map (const spike_empty) pl.spikes
             let n = length collisions' * 2
-            let indices = map (.spike0.0) collisions' ++ map (.spike1.0) collisions' :> [n]i32
+            let indices = map (.spike0.0) collisions' ++ map (.spike1.0) collisions' :> [n]i64
             let values = map (\pc -> {size=particle_mass * pc.1.spike0.1, color=pc.0.color}) particles_collisions ++
                              map (\pc -> {size=particle_mass * pc.1.spike1.1, color=pc.0.color}) particles_collisions :> [n]spike
             let spikes_additions = reduce_by_index spikes_empty spike_merge spike_empty indices values
-            let new_mass = particle_mass * r32 (length particles_collisions)
+            let new_mass = particle_mass * f32.i64 (length particles_collisions)
             let planet_mass_goal = planet_mass pl + new_mass
             let calc_spikes (factor: f32): [g]spike = map2 (\s sa ->
                                                               let sa_size' = factor * sa.size
@@ -333,40 +333,40 @@ let lys_render (s: state): [][]argb.colour =
                      else 0) s.planets
     in (reduce_comm (\(c0, m0) (c1, m1) -> (color_merge (c0, m0) (c1, m1), m0 + m1)) (0, 0) (zip planet_colors (map planet_mass s.planets))).0
 
-  let particle_index ({p, pd=_, color}: particle): (i32, argb.colour) =
+  let particle_index ({p, pd=_, color}: particle): (i64, argb.colour) =
     let xy_fac = r32 (i32.min s.h s.w)
     let find_base = r32 <-< i32.max 0
     let offset = vec2.scale (1 / xy_fac / 2) {y=find_base (s.h - s.w), x=find_base (s.w - s.h)}
     let p' = vec2.(scale xy_fac ((scale s.view_zoom p + {y=0.5, x=0.5} + offset) - scale s.view_zoom s.view_center))
     let (y, x) = (t32 p'.y, t32 p'.x)
     in if y >= 0 && y < s.h && x >= 0 && x < s.w
-       then (y * s.w + x, color)
+       then (i64.i32 (y * s.w + x), color)
        else (-1, 0)
 
-  let pixels = flatten (tabulate_2d s.h s.w render_planet_at)
+  let pixels = flatten (tabulate_2d (i64.i32 s.h) (i64.i32 s.w) (\y x -> render_planet_at (i32.i64 y) (i32.i64 x)))
   let (points_indices, points_values) = unzip (map particle_index s.particles)
   let pixels = scatter pixels points_indices points_values
-  in unflatten s.h s.w pixels
+  in unflatten (i64.i32 s.h) (i64.i32 s.w) pixels
 
 
 module lys: lys with text_content = text_content = {
   type~ state = state
 
-  let init (seed: u32) (h: i32) (w: i32): state =
+  let init (seed: u32) (h: i64) (w: i64): state =
     let rng = rnge.rng_from_seed [i32.u32 seed]
     let (rng, planets) = gen_planets rng
     let (rng, particles) = gen_particles rng
     in {planets, particles,
         mouse={y=0, x=0},
         view_zoom=0.1, view_center={y=0, x=0},
-        rng, h, w,
+        rng, h=i32.i64 h, w=i32.i64 w,
         info_idx=0,
         debugs=map debug_init planets}
 
   let grab_mouse = false
 
-  let resize (h: i32) (w: i32) (s: state): state =
-    s with h = h with w = w
+  let resize (h: i64) (w: i64) (s: state): state =
+    s with h = i32.i64 h with w = i32.i64 w
 
   let zoom_at_mouse (zoom_factor: f32) (s: state): state =
     let b = {y=r32 (s.mouse.y - s.h / 2),
