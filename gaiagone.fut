@@ -346,7 +346,7 @@ let lys_render (s: state): [][]argb.colour =
   let pixels = flatten (tabulate_2d (i64.i32 s.h) (i64.i32 s.w) (\y x -> render_planet_at (i32.i64 y) (i32.i64 x)))
   let (points_indices, points_values) = unzip (map particle_index s.particles)
   let pixels = scatter pixels points_indices points_values
-  in unflatten (i64.i32 s.h) (i64.i32 s.w) pixels
+  in unflatten pixels
 
 
 module lys: lys with text_content = text_content = {
